@@ -1,9 +1,6 @@
-
-# todo add mysql sqlite files handling
-
-# WEBSOCKET_SERVER = 'wss://mainnet.infura.io/ws/v3/{YOUR_INFURA_KEY}'
-WEBSOCKET_SERVER = ''
 ETHERSCAN = ''
+WEBSOCKET_SERVER = 'ws://127.0.0.1:8546'
+# WEBSOCKET_SERVER = 'wss://mainnet.infura.io/ws/v3/{YOUR_INFURA_KEY}'
 
 # modify for mongodb
 mongo_user = ''
