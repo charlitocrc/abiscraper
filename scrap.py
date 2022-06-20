@@ -1,53 +1,93 @@
 # todo
 #   add docs on functions
-#   add mysql sqlite files support
 #   add exception handling
 #   add better logging
+#   add checking of identical contract codes, to make less queries to etherscan
+
 import json
 import requests
 import asyncio
 import time
 from hexbytes import HexBytes
 from web3 import Web3, exceptions
-import databases
 import keys
 import logging
-
+from motor.motor_asyncio import (
+    AsyncIOMotorClient as MotorClient,
+)
 logging.basicConfig(filename=f'scrapper.log', format='%(levelname)s:%(message)s\n\n', level=logging.WARNING)
 
+w3_obj = Web3(Web3.WebsocketProvider(keys.WEBSOCKET_SERVER))  # init web3py websocket client
 
-w3_obj = Web3(Web3.WebsocketProvider(keys.WEBSOCKET_SERVER))
-cursor = databases.init_cursor(keys.DATA_SAVING_METHOD)
-addresses_bowl = []
+# init MongoDB database cursor
+client = MotorClient(keys.mongo_one_liner)
+client.get_io_loop = asyncio.get_running_loop
+cursor = client.ethereum
+
+addresses_bowl = []  # stores addresses in mem to avoid unnecessary calls
 
 
 def get_abi(address):
+    """
+    gets the abi from etherscan
+    :param address: ethereum addressto retrieve abi from
+    :return: 0 if error, str(abi) if abi found
+    """
     url = f'https://api.etherscan.io/api?apiKey={keys.ETHERSCAN}&module=contract&action=getabi&address={address}'
-    data = requests.get(url, timeout=(5, 10))
-    abi = json.loads(data.text)
-    if abi['status'] == "0":
+    try:
+        data = requests.get(url, timeout=(5, 10))
+    except requests.exceptions.Timeout:
+        # wait 5 more seconds and retry
+        print(f'Address {address} timeout, retrying in 5s')
+        time.sleep(5)
+        data = requests.get(url, timeout=(5, 10))
+
+    except requests.exceptions.RequestException as e:
+        logging.exception(f'Request to {address} on Etherscan error: {e}. Returning None')
         return 0
-    else:
-        return abi['result']
+
+    try:
+        abi = json.loads(data.text)
+        if abi['status'] == "0":
+            return 0
+        else:
+            return abi['result']
+    except Exception:
+        # catchall
+        return 0
 
 
 async def get_stored_addresses():
+    """
+    creates a global list with the addresses
+    this list will allow the script to check in memory if we have already checked a specific address
+    :return:
+    """
     global addresses_bowl
     print('Loading public keys')
+    addresses_bowl.clear()  # empty the list
     start = time.time()
     doc = cursor['addresses'].find({}, {"_id": 0, "p": 1})
-    for document in await doc.to_list(length=10000000):  # modify this number in case the number of contracts is > 10m
+    for document in await doc.to_list(length=40000000):  # modify this number in case the number of public keys is > 40m
         addresses_bowl.append(document['p'])
     print(f'Loaded public keys in {time.time()-start}')
 
 
 def prepare_document(address, address_type, abi, code):
+    """
+
+    :param address: str() ethereum public key
+    :param address_type: int() 1 if contract, 0 if 'normal address'
+    :param abi: str() of ABI if contract
+    :param code: bytescode of contract if available
+    :return: dict() to be inserted in the database
+    """
     document = {"p": address,
                 "a": abi,
                 "c": code,
                 "s": address_type,
-                "l": None,  # label
-                "t": int(time.time()),
+                # "l": None,  # label, optional
+                "t": int(time.time()),  # the current time
                 }
     return document
 
@@ -101,8 +141,11 @@ async def handler(event):
             logging.exception(e, block_hash)
         print(f"Processed txn {x} from block #{block_data['number']}")
 
-    # insert all transactions
-    await cursor['addresses'].insert_many(operations)
+    # insert all data
+    if operations:
+        # if the operations dict is not empty, attempt insert
+        await cursor['addresses'].insert_many(operations)
+
     print(f"Finished processing block #{block_data['number']}")
 
 
@@ -133,5 +176,5 @@ if __name__ == '__main__':
     while True:
         try:
             main()
-        except Exception as e:
-            logging.exception(e, 'MAINTHREAD ERROR')
+        except Exception as err:
+            logging.exception(err, 'MAINTHREAD ERROR')
