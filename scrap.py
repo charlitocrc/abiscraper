@@ -68,8 +68,9 @@ async def get_stored_addresses():
     addresses_bowl.clear()  # empty the list
     start = time.time()
     doc = cursor['addresses'].find({}, {"_id": 0, "p": 1})
-    for document in await doc.to_list(length=40000000):  # modify this number in case the number of public keys is > 40m
+    async for document in doc:
         addresses_bowl.append(document['p'])
+
     print(f'Loaded public keys in {time.time()-start}')
 
 
